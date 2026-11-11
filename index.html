@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tug Team</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #8fd3ff; }
+  body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 2px 4px #0008; font-weight: 800; }
+  #top { top: max(10px, env(safe-area-inset-top)); left: 0; right: 0; text-align: center; font-size: 22px; padding: 0 12px; }
+  #top small { display: block; font-size: 14px; font-weight: 700; opacity: .92; }
+  #top b.l { color: #ff6b6b; } #top b.r { color: #6bb8ff; }
+  #big { inset: 0; display: grid; place-items: center; text-align: center; font-size: min(14vw, 96px); line-height: 1; color: #fff; -webkit-text-stroke: 3px #5a3a1a; padding: 0 16px; }
+  #big small { display: block; font-size: min(5vw, 22px); -webkit-text-stroke: 0; margin-top: 12px; }
+  #msg { left: 16px; right: 16px; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 30px); text-align: center; font-size: 16px; }
+  #net { bottom: max(10px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); font-size: 12px; font-weight: 600; opacity: .85; white-space: nowrap; }
+  #over { position: fixed; inset: 0; display: grid; place-items: center; background: #2a1a0a66; }
+  #over[hidden] { display: none; }
+  .card { width: min(380px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; padding: 20px; border-radius: 18px; background: #4a3120; border: 2px solid #ffffff33; box-sizing: border-box; }
+  .card h2 { margin: 0 0 4px; font-size: 24px; color: #ffe066; }
+  .card h3 { margin: 14px 0 4px; font-size: 14px; color: #ffc48a; }
+  .card ol { margin: 0; padding-left: 24px; font-size: 14px; }
+  .card li span { float: right; font-variant-numeric: tabular-nums; opacity: .9; }
+  .card li.me { color: #ffe066; font-weight: 700; }
+  .card li i { font-style: normal; }
+  .card p { margin: 6px 0 0; font-size: 14px; opacity: .9; }
+  button.go { margin-top: 16px; width: 100%; min-height: 48px; border: 0; border-radius: 12px; background: #ffe066; color: #4a3120; font: 800 17px system-ui, sans-serif; cursor: pointer; }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div class="hud" id="top"></div>
+<div class="hud" id="big"></div>
+<div class="hud" id="msg"></div>
+<div class="hud" id="net">Connecting…</div>
+<div id="over" hidden><div class="card">
+  <h2 id="overTitle"></h2><p id="overLine"></p>
+  <h3>Strongest pullers</h3><ol id="results"></ol>
+  <h3>Most wins</h3><ol id="board"><li>Loading…</li></ol>
+  <button class="go" id="again">Play again</button>
+  <p id="next"></p>
+</div></div>
+<script>
+/* ═══ TUG TEAM · a Multiplayer Agent starter ═══════════════════════════════════════════
+ * Two teams, one rope, one mud pit. Tap on the beat to pull; pull together for a HEAVE!
+ * Versus, 2–10 players; bots fill both teams. Best of 3 rounds.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ tempo, timing windows, pull strength, combo, heave, round length, bots
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
+ *   BEAT .......... the beat clock (from the round's t0 and bpm) and the WebAudio drums
+ *   MATCH (HOST) .. teams, rounds, the rope, pulls, heaves, the splash, the winner.
+ *                   Only the host writes these.
+ *   BOTS .......... bots tap on (or near) the beat; the host rolls their timing
+ *   ME ............ judging your taps, your combo, sending your pulls in batches
+ *   DRAW .......... sky, banks, mud pit, rope, the two teams, the beat ring, power meters
+ *   HUD & RESULTS . score line, big words, results card, leaderboard
+ *   INPUT ......... any key, click or tap
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code):
+ *   - Each player writes its OWN entity: `hb` (heartbeat) once a second and `n`/`c` (name,
+ *     color) once. Nothing else: your pulls are intents.
+ *   - The HOST is the lowest sessionId among live players (heartbeat seen in the last 3s),
+ *     worked out every frame. Only the host writes the shared fields `game` (id, v, phase,
+ *     round, wins, tempo, t0, the teams), `tug` (~12/s: the rope position, team power,
+ *     everyone's last pull, the last heave per team, pull stats) and `bots`. A new host
+ *     adopts all three and carries on.
+ *   - Beats are timestamps: beat n is at t0 + n × 60000/bpm, so everyone's drums and tap
+ *     judging line up. Each player judges ITS OWN taps (perfect / good / off) and sends them
+ *     in batches, intent "pull" {r, t: [[beat, quality], ...]}, ~5 times a second. The host
+ *     counts one tap per player per beat, works out the combo and moves the rope.
+ *   - HEAVE: when a beat's window closes, the host checks how many of a team hit it on time;
+ *     enough of them together gives that team a big extra pull.
+ *   - "again" asks the host to start the next match sooner.
+ *   - ?attract plays offline with bots only (the preview video is recorded from it).
+ *   - Leaderboard "tug-wins": matches your team won (submitted with "inc").
+ */
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  seats: 8,              // bots fill the two teams up to this many players
+  briefMs: 3500,         // teams line up before the first round
+  countBeats: 4,         // a count-in of this many beats before pulls count
+  roundMs: 40000,        // a round ends after this long: the side the flag is on wins
+  splashMs: 3800,        // the losers in the mud, before the next round
+  overMs: 10000,         // results card before the next match
+  winsNeeded: 2,         // best of 3
+  bpm: [96, 120],        // each round picks a tempo in this range
+  perfect: 70,           // ms either side of the beat for a PERFECT pull...
+  good: 140,             // ...and a GOOD one; further off is a weak pull
+  power: [0.2, 0.65, 1], // pull strength: off, good, perfect
+  comboEvery: 4,         // every this many on-beat pulls in a row...
+  comboBonus: 0.1,       // ...adds this much to each pull...
+  comboMax: 0.5,         // ...up to this much
+  pullStep: 0.045,       // how far one pull of strength 1 moves the rope (it wins at ±1)
+  heaveShare: 0.8,       // this share of a team on the same beat = HEAVE!...
+  heaveBonus: 0.8,       // ...worth this much extra pull per player who hit it
+  closeMs: 450,          // the host checks a beat for a heave this long after it
+  sendMs: 200,           // how often your taps go to the host
+  inputOffsetMs: 0,      // add this to every tap if your taps feel late (Bluetooth headphones: try -80)
+  botOnBeat: [0.55, 0.8],// how often each bot hits the beat (picked per bot)...
+  botPerfect: 0.55,      // ...and how many of those hits are perfect
+  board: "tug-wins",
+};
+const TEAM = [{ name: "RED", color: "#ff5a5a", dark: "#b8323a", side: -1 }, { name: "BLUE", color: "#4aa8ff", dark: "#2462b0", side: 1 }];
+const BOT_NAMES = ["Biff", "Rocco", "Mops", "Tank", "Gus", "Hilda", "Brick", "Dottie", "Stomp", "Tilly", "Moose", "Pudding"];
+const COLORS = ["#ffd23f", "#3fd08a", "#b77dff", "#ff8c42", "#3fd6d0", "#ff6fb5", "#a3e635", "#f9a8d4", "#fbbf24", "#c4b5fd", "#86efac", "#fdba74"];
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'tug-team',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const QS = new URLSearchParams(location.search), ATTRACT = QS.has("attract");
+if (ATTRACT) Object.assign(CONFIG, { briefMs: 500, countBeats: 2, roundMs: 9000, splashMs: 2400, overMs: 2000, pullStep: 0.1, botOnBeat: [0.45, 0.95], bpm: [116, 124] });
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+const memo = new Map();
+/** A shared JSON field, parsed once per change (read-only: never mutate what this returns). */
+function shared(key, fb) { const raw = S.shared[key], m = memo.get(key); if (m && m.raw === raw) return m.v; const v = parse(raw, fb); memo.set(key, { raw, v }); return v; }
+let net = null, S = { entities: { players: {} }, shared: {} };
+const seenHb = new Map();
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+let hostHold = 0, lastTick = performance.now(); // lastTick: when frame() last ran; hostHold: after a freeze, no hosting before this time (see frame())
+const isHost = () => performance.now() > hostHold && performance.now() - lastTick < 1000 && livePlayers()[0] === net.sessionId; // a tab whose loop has stopped doesn't host
+const isBot = (id) => id[0] === "@"; // bot ids look like "@3"; sessionIds never have an @
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const rnd = (r) => r[0] + Math.random() * (r[1] - r[0]);
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const hash = (s) => [...String(s)].reduce((n, ch) => (n * 31 + ch.charCodeAt(0)) >>> 0, 7);
+
+// ── BEAT ────────────────────────────────────────────────────────────────────────────
+const beatMs = (g) => 60000 / g.bpm;
+const beatAt = (g, n) => g.t0 + n * beatMs(g);
+/** Where we are in the beat at shared time t: the nearest beat number and how far off it we are (ms). */
+function nearestBeat(g, t) { const f = (t - g.t0) / beatMs(g), n = Math.round(f); return { n, err: t - beatAt(g, n), f }; }
+const roundKey = (g) => g.id * 100 + g.round;
+let AC = null, noise = null, master = null;
+function unlockAudio() {
+  if (AC || ATTRACT) return;
+  try {
+    AC = new AudioContext(); master = AC.createGain(); master.gain.value = 0.55; master.connect(AC.destination);
+    noise = AC.createBuffer(1, AC.sampleRate * 0.5, AC.sampleRate);
+    const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  } catch { AC = null; }
+}
+const hz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+function voice(type, f, at, len, vol, f2) {
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, at); if (f2) o.frequency.exponentialRampToValueAtTime(f2, at + len);
+  g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(vol, at + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, at + len);
+  o.connect(g).connect(master); o.start(at); o.stop(at + len + 0.05);
+}
+function hiss(at, len, vol, hp) { const s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain(); s.buffer = noise; f.type = "highpass"; f.frequency.value = hp; g.gain.setValueAtTime(vol, at); g.gain.exponentialRampToValueAtTime(0.0001, at + len); s.connect(f).connect(g).connect(master); s.start(at, Math.random() * 0.3); s.stop(at + len + 0.02); }
+const RIFF = [0, 0, 3, 5, 7, 7, 5, 3]; // the bass line, one note per beat
+const drums = { key: "", next: 0 };
+/** Called every frame: queue the drums ~0.15s ahead on the audio clock, lined up with the beat clock. */
+function playDrums(g, t) {
+  if (!AC || (g.phase !== "pull" && g.phase !== "brief")) return;
+  const key = roundKey(g) + ":" + g.t0, half = beatMs(g) / 2;
+  if (drums.key !== key) { drums.key = key; drums.next = Math.ceil((t - g.t0) / half); }
+  for (let at = g.t0 + drums.next * half; at < t + 150; at = g.t0 + ++drums.next * half) {
+    if (at < t - 30 || (g.phase === "pull" && at > g.ends)) continue;
+    const a = AC.currentTime + (at - t) / 1000, i = drums.next, beat = i / 2;
+    if (i % 2) { hiss(a, 0.04, 0.06, 8000); continue; } // shaker on the off-beats
+    if (beat < 0) { voice("square", beat % 4 === -4 ? 1320 : 990, a, 0.06, 0.08); continue; } // count-in clicks
+    voice("sine", 140, a, 0.25, 0.9, 45); // kick on every beat
+    if (beat % 2 === 1) { hiss(a, 0.12, 0.22, 1500); voice("triangle", 200, a, 0.08, 0.15); } // clap on 2 and 4
+    voice("sawtooth", hz(38 + RIFF[beat % 8]), a, half / 1000 * 1.6, 0.14);
+  }
+}
+function sfx(kind, q) {
+  if (!AC) return;
+  const a = AC.currentTime;
+  if (kind === "tap") voice("triangle", [300, 420, 560][q], a, 0.09, q === 2 ? 0.2 : 0.12, [200, 300, 420][q]);
+  if (kind === "slip") voice("square", 160, a, 0.08, 0.05, 120);
+  if (kind === "heave") { voice("sawtooth", 110, a, 0.35, 0.18, 220); voice("square", 220, a + 0.05, 0.3, 0.08, 330); }
+  if (kind === "splash") { const s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain(); s.buffer = noise; f.type = "lowpass"; f.frequency.setValueAtTime(1800, a); f.frequency.exponentialRampToValueAtTime(120, a + 0.6); g.gain.setValueAtTime(0.5, a); g.gain.exponentialRampToValueAtTime(0.001, a + 0.7); s.connect(f).connect(g).connect(master); s.start(a); s.stop(a + 0.7); }
+  if (kind === "win") [523, 659, 784, 1047].forEach((f, i) => voice("triangle", f, a + i * 0.12, 0.3, 0.14));
+  if (kind === "go") voice("square", 880, a, 0.25, 0.1, 1320);
+}
+
+// ── MATCH (HOST) ────────────────────────────────────────────────────────────────────
+const host = { was: false, last: null, bots: new Map(), tug: null, lastPub: 0, lastBots: 0, again: false, seen: new Set(), beats: new Map(), combo: {}, botBeat: -1, pow: [0, 0] };
+/** The match as state has it, or the host's own newer write that hasn't come back yet. `v` only goes up. */
+function game() { const g = shared("game", null); return host.last && isHost() && (!g || host.last.v > g.v) ? host.last : g; }
+function writeGame(g) { g = { ...g, v: (game()?.v ?? 0) + 1 }; host.last = g; net.setShared("game", JSON.stringify(g)); return g; }
+const freshTug = (r) => ({ r, x: 0, p: [0, 0], k: {}, hv: [-9, -9], s: {} });
+/** The rope as everyone sees it: the host's live copy, or what it last published. */
+function tug(g) { if (isHost() && host.tug && host.tug.r === roundKey(g)) return host.tug; const t = shared("tug", null); return t && t.r === roundKey(g) ? t : freshTug(roundKey(g)); }
+const teamOf = (g, id) => (g.team[id] === undefined ? -1 : g.team[id]);
+/** A team's players, front of the rope first (people before bots). */
+const lineup = (g, k) => Object.keys(g.team).filter((id) => g.team[id] === k).sort((a, b) => isBot(a) - isBot(b) || (a < b ? -1 : 1));
+
+function newMatch(id) {
+  host.bots.clear();
+  const here = livePlayers(), team = {};
+  here.forEach((h, i) => (team[h] = i % 2));
+  const G = { id, phase: "brief", round: 1, wins: [0, 0], bpm: 100, t0: 0, ends: Date.now() + CONFIG.briefMs, team, last: -1, winner: -1, tot: {} };
+  fillBots(G);
+  host.tug = freshTug(roundKey(G)); resetRound();
+  return writeGame(G);
+}
+const perTeam = (G) => Math.max(1, Math.ceil(Math.max(CONFIG.seats, Object.keys(G.team).filter((id) => !isBot(id)).length) / 2));
+/** Bots fill each team up to the same size. */
+function fillBots(G) {
+  for (const k of [0, 1]) {
+    while (lineup(G, k).length < perTeam(G)) {
+      let i = 1; while (host.bots.has("@" + i)) i++;
+      const used = new Set([...host.bots.values()].map((b) => b.c).concat(livePlayers().map(colorOf)));
+      host.bots.set("@" + i, { i: "@" + i, n: BOT_NAMES[(i - 1) % BOT_NAMES.length], c: COLORS.find((c) => !used.has(c)) || COLORS[i % COLORS.length], k: Math.round(rnd(CONFIG.botOnBeat) * 100) / 100 });
+      G.team["@" + i] = k; host.lastBots = 0;
+    }
+    while (lineup(G, k).length > perTeam(G)) { const bot = lineup(G, k).reverse().find(isBot); if (!bot) break; delete G.team[bot]; host.bots.delete(bot); host.lastBots = 0; }
+  }
+}
+/** People who arrive take a bot's place on the team with fewer people; people who leave are replaced by a bot. */
+function syncTeams(G) {
+  const live = new Set(livePlayers());
+  let changed = false;
+  for (const id of Object.keys(G.team)) if (!isBot(id) && !live.has(id)) { delete G.team[id]; changed = true; }
+  for (const id of live) if (G.team[id] === undefined) {
+    const people = (k) => lineup(G, k).filter((x) => !isBot(x)).length;
+    const k = people(0) < people(1) ? 0 : people(1) < people(0) ? 1 : lineup(G, 0).length <= lineup(G, 1).length ? 0 : 1;
+    const bot = lineup(G, k).reverse().find(isBot);
+    if (bot) { delete G.team[bot]; host.bots.delete(bot); }
+    G.team[id] = k; changed = true;
+  }
+  if (changed) fillBots(G);
+  return changed;
+}
+function resetRound() { host.seen = new Set(); host.beats = new Map(); host.combo = {}; host.botBeat = -1; host.pow = [0, 0]; }
+function startRound(G, t) {
+  const bpm = Math.round(rnd(CONFIG.bpm)), beat = 60000 / bpm;
+  Object.assign(G, { phase: "pull", bpm, t0: t + CONFIG.countBeats * beat, ends: t + CONFIG.countBeats * beat + CONFIG.roundMs, last: -1 });
+  host.tug = freshTug(roundKey(G)); resetRound();
+}
+/** Become host: take over the match, the rope and the bots exactly as state has them. */
+function adopt() {
+  host.was = true; host.bots.clear(); resetRound();
+  for (const b of shared("bots", [])) host.bots.set(b.i, { ...b });
+  const g = shared("game", null), t = shared("tug", null);
+  host.tug = g && t && t.r === roundKey(g) ? clone(t) : g ? freshTug(roundKey(g)) : null;
+  if (g && g.phase === "pull") host.botBeat = nearestBeat(g, Date.now()).n; // don't replay beats the last host already played
+}
+function botList() { return isHost() ? [...host.bots.values()] : shared("bots", []); }
+
+function hostTick(dt, now) {
+  if (!host.was) adopt();
+  let g = game();
+  if (!g) g = newMatch(1);
+  const t = Date.now(), G = clone(g);
+  let dirty = syncTeams(G);
+  if (!host.tug || host.tug.r !== roundKey(G)) { host.tug = freshTug(roundKey(G)); resetRound(); }
+  if (G.phase === "brief" && t >= G.ends) { startRound(G, t); dirty = true; }
+  else if (G.phase === "pull") {
+    botTaps(G, t);
+    closeBeats(G, t);
+    const T = host.tug;
+    for (const k of [0, 1]) { host.pow[k] *= Math.exp(-dt * 1.6); T.p[k] = +clamp(host.pow[k] / (lineup(G, k).length * 1.3), 0, 1).toFixed(2); }
+    if (Math.abs(T.x) >= 1 || t >= G.ends) { // the round is over: the side the flag is on wins
+      const w = T.x > 0 ? 1 : T.x < 0 ? 0 : T.p[1] > T.p[0] ? 1 : 0;
+      T.x = clamp(T.x, -1, 1); G.wins[w]++;
+      for (const [id, st] of Object.entries(T.s)) { const a = G.tot[id] || [0, 0, 0]; G.tot[id] = [+(a[0] + st[0]).toFixed(1), a[1] + st[1], Math.max(a[2], st[2])]; } // the match totals for the results card
+      Object.assign(G, { phase: "splash", last: w, ends: t + CONFIG.splashMs }); dirty = true;
+    }
+  } else if (G.phase === "splash" && t >= G.ends) {
+    if (G.wins[G.last] >= CONFIG.winsNeeded) Object.assign(G, { phase: "over", winner: G.last, ends: t + CONFIG.overMs });
+    else { G.round++; startRound(G, t); }
+    dirty = true;
+  }
+  if (dirty) writeGame(G);
+  if (G.phase === "over" && (t >= G.ends || host.again)) newMatch(G.id + 1);
+  host.again = false;
+  if (now - host.lastPub > 80 && host.tug) { host.lastPub = now; net.setShared("tug", JSON.stringify(host.tug)); } // ~12/s: the rope, power, last pulls
+  if (now - host.lastBots > 1000) { host.lastBots = now; net.setShared("bots", JSON.stringify([...host.bots.values()])); }
+}
+/** One pull: one per player per beat; the host works out the combo, moves the rope and notes it for heaves. */
+function applyTap(G, id, beat, q) {
+  const k = teamOf(G, id), T = host.tug;
+  if (k < 0 || G.phase !== "pull" || !T || T.r !== roundKey(G) || beat < 0 || ![0, 1, 2].includes(q)) return;
+  const cur = nearestBeat(G, Date.now()).n;
+  if (beat > cur + 1 || beat < cur - 6 || host.seen.has(id + ":" + beat)) return;
+  host.seen.add(id + ":" + beat);
+  const c = host.combo[id] || { b: -9, n: 0 };
+  c.n = q >= 1 ? (c.b === beat - 1 ? c.n + 1 : 1) : 0; c.b = beat; host.combo[id] = c;
+  const force = CONFIG.power[q] * (1 + Math.min(CONFIG.comboMax, Math.floor(c.n / CONFIG.comboEvery) * CONFIG.comboBonus));
+  T.x = clamp(T.x + TEAM[k].side * force * CONFIG.pullStep, -1.2, 1.2);
+  T.k[id] = [beat, q];
+  const st = T.s[id] || [0, 0, 0]; st[0] = +(st[0] + force).toFixed(2); if (q === 2) st[1]++; st[2] = Math.max(st[2], c.n); T.s[id] = st;
+  host.pow[k] += force;
+  if (q >= 1) { if (!host.beats.has(beat)) host.beats.set(beat, [new Set(), new Set()]); host.beats.get(beat)[k].add(id); }
+}
+/** A beat's window has closed: did enough of a team hit it together? HEAVE! */
+function closeBeats(G, t) {
+  for (const [beat, sets] of host.beats) {
+    if (t < beatAt(G, beat) + CONFIG.closeMs) continue;
+    host.beats.delete(beat);
+    for (const k of [0, 1]) {
+      const size = lineup(G, k).length, need = Math.max(1, Math.ceil(size * CONFIG.heaveShare));
+      if (sets[k].size < need) continue;
+      host.tug.x = clamp(host.tug.x + TEAM[k].side * CONFIG.heaveBonus * sets[k].size * CONFIG.pullStep, -1.2, 1.2);
+      host.tug.hv[k] = beat; host.pow[k] += sets[k].size;
+    }
+  }
+}
+
+// ── BOTS ────────────────────────────────────────────────────────────────────────────
+/** Each beat, a little after it (about when a person's tap would arrive), every bot rolls its timing. */
+function botTaps(G, t) {
+  while (beatAt(G, host.botBeat + 1) + 120 <= t) {
+    const beat = ++host.botBeat;
+    if (beat < 0) continue;
+    for (const id of Object.keys(G.team)) {
+      const b = host.bots.get(id);
+      if (!b || Math.random() < 0.06) continue; // now and then a bot misses a beat altogether
+      const on = Math.random() < b.k, q = on ? (Math.random() < CONFIG.botPerfect ? 2 : 1) : 0;
+      applyTap(G, id, beat, q);
+    }
+  }
+}
+
+// ── ME ──────────────────────────────────────────────────────────────────────────────
+const FRIENDLY = ["Zippy", "Sunny", "Bouncy", "Lucky", "Speedy", "Sneaky"], CRITTERS = ["Otter", "Fox", "Bunny", "Panda", "Gecko", "Koala"];
+const myName = (() => { try { return localStorage.getItem("mpa-name") || ""; } catch { return ""; } })() || FRIENDLY[Math.floor(Math.random() * 6)] + " " + CRITTERS[Math.floor(Math.random() * 6)];
+let myColor = COLORS[0]; // picked on join: the first color nobody in the room has
+const me = { round: -1, lastBeat: -99, combo: 0, batch: [], lastSend: 0, judge: null, auto: new Map(), submitted: -1, taps: 0 };
+const nameOf = (id) => (id === net.sessionId ? myName : isBot(id) ? botList().find((b) => b.i === id)?.n || "Bot" : S.entities.players[id]?.n || "Player");
+const colorOf = (id) => (id === net.sessionId ? myColor : isBot(id) ? botList().find((b) => b.i === id)?.c || "#ccc" : S.entities.players[id]?.c || "#ccc");
+/** A tap at performance-time `at` (from the input event, so slow work after it doesn't count). */
+function tap(at) {
+  if (!(at > 0 && at <= performance.now())) at = performance.now();
+  const t0 = at; unlockAudio(); // (the tap time is already stamped)
+  const g = game(), id = net.sessionId;
+  if (!g || g.phase !== "pull" || teamOf(g, id) < 0) return;
+  const t = Date.now() - (performance.now() - t0) + CONFIG.inputOffsetMs, { n, err } = nearestBeat(g, t);
+  if (n < 0) return; // still counting in
+  if (n === me.lastBeat) { me.judge = { j: "TOO FAST", c: "#ffb3b3", at: performance.now() }; sfx("slip"); return; } // one pull per beat
+  const q = Math.abs(err) <= CONFIG.perfect ? 2 : Math.abs(err) <= CONFIG.good ? 1 : 0;
+  me.combo = q >= 1 ? (me.lastBeat === n - 1 ? me.combo + 1 : 1) : 0;
+  me.lastBeat = n; me.taps++;
+  me.batch.push([n, q]);
+  me.judge = { j: ["WEAK", "GOOD", "PERFECT"][q], c: ["#ffb3b3", "#9fe8ff", "#b6ff8a"][q], at: performance.now() };
+  pulled.set(id, performance.now()); sfx("tap", q);
+  if (isHost()) { flush(g); }
+}
+/** Send my batch of taps to the host (or apply them, if I am the host). */
+function flush(g) {
+  if (!me.batch.length) return;
+  const taps = me.batch.splice(0);
+  if (isHost()) for (const [n, q] of taps) applyTap(g, net.sessionId, n, q);
+  else net.send("pull", { r: roundKey(g), t: taps });
+}
+function onPull(data, from) {
+  const g = game();
+  if (!isHost() || !g || !data || data.r !== roundKey(g) || !Array.isArray(data.t)) return;
+  for (const x of data.t.slice(0, 8)) if (Array.isArray(x)) applyTap(g, from, +x[0], +x[1]);
+}
+/** ?attract: your character taps itself, mostly on the beat. */
+function autopilot(g, t) {
+  if (!ATTRACT || g.phase !== "pull") return;
+  const { n } = nearestBeat(g, t);
+  if (n < 0 || me.lastBeat >= n) return;
+  if (!me.auto.has(n)) me.auto.set(n, (Math.random() - 0.5) * 120);
+  if (t >= beatAt(g, n) + me.auto.get(n)) tap(performance.now());
+}
+
+// ── DRAW ────────────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const cv = $("game"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1, U = 30, GY = 0, SP = 1.25; // U = pixels per unit, GY = ground line, SP = spacing between teammates
+function fit() { DPR = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); }
+addEventListener("resize", fit); addEventListener("orientationchange", fit); fit();
+const pulled = new Map(); // id -> when its last pull was seen (performance time): the jerk animation
+const heaveAt = [0, 0], fx = [];
+let shown = 0, shake = 0; // the rope position as drawn (eased toward the published one)
+function burst(x, y, colors, n, speed, grav = 9) { for (let i = 0; i < n; i++) fx.push({ x, y, vx: (Math.random() - 0.5) * speed, vy: Math.random() * speed * 0.8, life: 0.6 + Math.random() * 0.6, col: colors[i % colors.length], grav, r: 0.06 + Math.random() * 0.08 }); }
+const X = (x) => W / 2 + x * U, Y = (y) => GY - y * U;
+/** Where teammate i of team k stands: on its own bank, all of them dragged along by the rope. */
+const memberX = (k, i, rope) => TEAM[k].side * (3.0 + i * SP) + rope * 2.6;
+const MUD = 2.4; // the pit runs from -MUD to +MUD
+function draw(g, T, t, now, dt) {
+  const lines = [lineup(g, 0), lineup(g, 1)], most = Math.max(lines[0].length, lines[1].length, 1);
+  const tall = H > W;
+  SP = tall ? 1.05 : 1.25;
+  U = tall ? W / (2 * (3.0 + 1.5 * SP + 0.8)) : ATTRACT ? W / (2 * (3.0 + 2.6 * SP + 0.5)) : Math.min(W / (2 * (3.0 + (most - 1) * SP + 1.4)), H / 9.5); // a tall phone shows the front of each team
+  GY = H * (tall ? 0.62 : ATTRACT ? 0.76 : 0.66);
+  shown += ((T ? T.x : 0) - shown) * Math.min(1, dt * (isHost() ? 14 : 9));
+  shake = Math.max(0, shake - dt * 2);
+  ctx.setTransform(DPR, 0, 0, DPR, (Math.random() - 0.5) * shake * 10 * DPR, (Math.random() - 0.5) * shake * 10 * DPR);
+  // sky, sun, hills, clouds
+  const sky = ctx.createLinearGradient(0, 0, 0, GY); sky.addColorStop(0, "#5fb8ff"); sky.addColorStop(1, "#cdeeff"); ctx.fillStyle = sky; ctx.fillRect(-20, -20, W + 40, GY + 20);
+  ctx.fillStyle = "#fff4b0"; ctx.beginPath(); ctx.arc(W * 0.82, H * 0.14, Math.min(W, H) * 0.06, 0, Math.PI * 2); ctx.fill();
+  for (let i = 0; i < 4; i++) { const cx = ((now / 60 + i * W * 0.37) % (W + 200)) - 100, cy = H * (0.1 + (i % 3) * 0.07); ctx.fillStyle = "#ffffffcc"; for (const [dx, r] of [[0, 22], [24, 28], [52, 20]]) { ctx.beginPath(); ctx.arc(cx + dx, cy, r * (0.8 + (i % 2) * 0.3), 0, Math.PI * 2); ctx.fill(); } }
+  ctx.fillStyle = "#8fd67a"; ctx.beginPath(); ctx.moveTo(-20, GY); for (let x = -20; x <= W + 20; x += 20) ctx.lineTo(x, GY - U * (1.6 + Math.sin(x / 140) * 0.7 + Math.sin(x / 57) * 0.25)); ctx.lineTo(W + 20, GY); ctx.fill();
+  // the crowd on the hill, bobbing to the beat
+  const bob = g.phase === "pull" && t > g.t0 ? Math.pow(1 - (((t - g.t0) / beatMs(g)) % 1), 3) : 0;
+  for (let i = 0; i < 44; i++) {
+    const row = i % 3, col = Math.floor(i / 3), x = ((col + row * 0.37 + (hash(i) % 10) * 0.03) / 15) * (W + 40) - 20, y = GY - U * (1.75 + row * 0.34) - bob * U * 0.12 * ((i % 2) + 0.5), r = U * (0.15 - row * 0.02);
+    ctx.fillStyle = ["#ff8a8a", "#8ac4ff", "#ffe08a", "#b9f28a", "#e0a8ff", "#ffc48a"][i % 6]; ctx.beginPath(); ctx.arc(x, y + r * 1.6, r * 1.15, Math.PI, 0); ctx.fill();
+    ctx.fillStyle = "#ffe0c2"; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  // the banks and the mud pit between them
+  ctx.fillStyle = "#6cc04a"; ctx.fillRect(-20, GY, W + 40, H - GY + 20);
+  ctx.fillStyle = "#5aa83d"; ctx.fillRect(-20, GY, W + 40, U * 0.18);
+  ctx.fillStyle = "#8a5a32"; ctx.fillRect(-20, GY + U * 0.18, W + 40, H);
+  ctx.fillStyle = "#6e4424"; for (let i = 0; i < 40; i++) ctx.fillRect((i * 97) % W, GY + U * (0.6 + ((i * 37) % 30) / 6), 6, 4);
+  ctx.fillStyle = "#5b3518"; ctx.beginPath(); ctx.ellipse(X(0), GY + U * 0.05, MUD * U, U * 1.1, 0, 0, Math.PI); ctx.fill();
+  ctx.fillStyle = "#7a4a26"; ctx.beginPath(); ctx.ellipse(X(0), GY + U * 0.05, MUD * U, U * 0.32, 0, 0, Math.PI * 2); ctx.fill();
+  for (let i = 0; i < 5; i++) { const ph = (now / 900 + i * 0.37) % 1, bx = X(Math.sin(i * 2.3) * MUD * 0.7); ctx.fillStyle = `rgba(160,110,70,${1 - ph})`; ctx.beginPath(); ctx.arc(bx, GY + U * 0.05, U * 0.08 * (0.5 + ph), 0, Math.PI * 2); ctx.fill(); }
+  // the win lines (white stakes) and the middle mark
+  for (const s of [-1, 1]) { ctx.fillStyle = "#ffffff"; ctx.fillRect(X(s * MUD) - 2, Y(0.9), 4, U * 0.9); ctx.fillStyle = TEAM[s < 0 ? 0 : 1].color; ctx.fillRect(X(s * MUD) - 5, Y(0.95), 10, U * 0.18); }
+  ctx.fillStyle = "#ffffffaa"; ctx.fillRect(X(0) - 1.5, Y(0.6), 3, U * 0.6);
+  // who's where
+  const ph = g.phase, sp = ph === "splash" ? (t - (g.ends - CONFIG.splashMs)) / 1000 : 0, lost = ph === "splash" ? 1 - g.last : -1;
+  const people = [];
+  for (const k of [0, 1]) lines[k].forEach((id, i) => {
+    let x = memberX(k, i, shown), y = 0, fall = 0;
+    if (k === lost) { // the losers slide into the mud, one after another
+      const s = clamp((sp - i * 0.12) / 0.5, 0, 1), land = TEAM[k].side * MUD * (0.15 + (0.7 * i) / Math.max(1, lines[k].length - 1)); fall = s;
+      x += (land - x) * s; y = -0.5 * s + Math.sin(s * Math.PI) * 0.6; // a little hop, then face-first into the mud
+    } else if (Math.abs(x) < MUD) y = -0.3 * clamp((MUD - Math.abs(x)) / 0.8, 0, 1); // standing in the mud
+    people.push({ id, k, i, x, y, fall });
+  });
+  // the rope: from the back of one team to the back of the other, through everyone's hands
+  const ends = [people.filter((p) => p.k === 0).reduce((m, p) => Math.min(m, p.x), 0), people.filter((p) => p.k === 1).reduce((m, p) => Math.max(m, p.x), 0)];
+  const hand = 0.85, mid = shown * 2.6;
+  if (ph !== "splash") {
+    ctx.strokeStyle = "#7a5230"; ctx.lineWidth = Math.max(4, U * 0.16); ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(X(ends[0] - 0.4), Y(hand - 0.15)); ctx.quadraticCurveTo(X(mid), Y(hand - 0.25), X(ends[1] + 0.4), Y(hand - 0.15)); ctx.stroke();
+    ctx.strokeStyle = "#c79a5c"; ctx.lineWidth = Math.max(2, U * 0.06); ctx.setLineDash([U * 0.18, U * 0.14]); ctx.stroke(); ctx.setLineDash([]);
+    // the flag in the middle of the rope
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(X(mid) - 2, Y(hand - 0.2), 4, U * 0.65);
+    ctx.fillStyle = shown < -0.05 ? TEAM[0].color : shown > 0.05 ? TEAM[1].color : "#ffe066";
+    ctx.beginPath(); ctx.moveTo(X(mid), Y(hand - 0.3)); ctx.lineTo(X(mid) + U * 0.45 * Math.sin(now / 150), Y(hand - 0.6)); ctx.lineTo(X(mid), Y(hand - 0.85)); ctx.fill();
+  }
+  for (const p of people) drawBuddy(p, g, T, now);
+  // HEAVE! over a team
+  for (const k of [0, 1]) { const age = (now - heaveAt[k]) / 1000; if (age < 0.8) { ctx.globalAlpha = 1 - age / 0.8; ctx.font = `900 ${Math.round(U * 0.9 * (1 + (0.8 - age) * 0.3))}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.lineWidth = 6; ctx.strokeStyle = TEAM[k].dark; ctx.strokeText("HEAVE!", X(TEAM[k].side * 5), Y(3.2 + age)); ctx.fillStyle = "#fff"; ctx.fillText("HEAVE!", X(TEAM[k].side * 5), Y(3.2 + age)); ctx.globalAlpha = 1; } }
+  // mud splashes and sparks
+  for (let i = fx.length - 1; i >= 0; i--) { const p = fx[i]; p.life -= dt; if (p.life <= 0) { fx.splice(i, 1); continue; } p.x += p.vx * dt; p.y += p.vy * dt; p.vy -= p.grav * dt; ctx.globalAlpha = Math.min(1, p.life * 2); ctx.fillStyle = p.col; ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), p.r * U, 0, Math.PI * 2); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  if (T) drawMeters(g, T);
+  if (ph === "pull") drawBeatRing(g, t, now);
+}
+/** A chunky buddy seen from the side, leaning back on the rope; it jerks on every pull. */
+function drawBuddy(p, g, T, now) {
+  const k = p.k, side = TEAM[k].side, color = colorOf(p.id), jerk = clamp(1 - (now - (pulled.get(p.id) || 0)) / 220, 0, 1), heave = clamp(1 - (now - heaveAt[k]) / 400, 0, 1);
+  const won = g.phase === "splash" && g.last === k, t = now / 1000, ph = hash(p.id) % 7;
+  let lean = side * (0.28 + jerk * 0.25 + heave * 0.3); // away from the middle
+  if (won) lean = Math.sin(t * 8 + ph) * 0.15;
+  if (p.fall) lean = -side * 0.6 * p.fall;
+  const hop = won ? Math.abs(Math.sin(t * 9 + ph)) * 0.35 : 0, bx = X(p.x), by = Y(p.y + hop), h = U * 1.15, w = U * 0.82;
+  ctx.save(); ctx.translate(bx, by);
+  ctx.fillStyle = "#00000030"; ctx.beginPath(); ctx.ellipse(0, U * 0.03 + hop * U, w * 0.6, U * 0.1, 0, 0, Math.PI * 2); ctx.fill();
+  for (const f of [-1, 1]) { ctx.fillStyle = "#3a2a2a"; ctx.beginPath(); ctx.ellipse(f * w * 0.22 + side * U * 0.12, -U * 0.06, U * 0.17, U * 0.1, 0, 0, Math.PI * 2); ctx.fill(); }
+  ctx.rotate(lean);
+  ctx.fillStyle = color; ctx.beginPath(); ctx.ellipse(0, -h * 0.5, w * 0.5, h * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "#00000044"; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = TEAM[k].color; ctx.fillRect(-w * 0.5, -h * 0.82, w, h * 0.13); // team headband
+  ctx.fillStyle = "#ffffff44"; ctx.beginPath(); ctx.ellipse(-w * 0.18, -h * 0.68, w * 0.14, h * 0.1, 0, 0, Math.PI * 2); ctx.fill();
+  if (p.fall > 0.6) { ctx.fillStyle = "#5b3518cc"; ctx.beginPath(); ctx.ellipse(0, -h * 0.25, w * 0.52, h * 0.3, 0, 0, Math.PI * 2); ctx.fill(); } // muddy
+  const ex = -side * w * 0.2; // eyes look at the middle
+  for (const e of [-1, 1]) {
+    const x0 = ex + e * w * 0.14;
+    if (won) { ctx.strokeStyle = "#1b1030"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(x0, -h * 0.6, U * 0.07, Math.PI, 0); ctx.stroke(); continue; }
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x0, -h * 0.62, U * 0.1, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#1b1030"; ctx.beginPath(); ctx.arc(x0 - side * U * 0.03, -h * 0.62 + (jerk + heave > 0.3 ? U * 0.02 : 0), U * 0.05, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = "#1b1030"; ctx.beginPath(); ctx.ellipse(ex, -h * 0.42, U * (jerk + heave > 0.3 ? 0.09 : 0.06), U * (jerk + heave > 0.3 ? 0.07 : 0.03), 0, 0, Math.PI * 2); ctx.fill(); // grunting mouth
+  if (g.phase !== "splash") { ctx.strokeStyle = color; ctx.lineWidth = U * 0.14; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(0, -h * 0.45); ctx.lineTo(-side * w * 0.65, -h * 0.72); ctx.stroke(); } // arms to the rope
+  else if (won) { ctx.strokeStyle = color; ctx.lineWidth = U * 0.14; ctx.lineCap = "round"; for (const e of [-1, 1]) { ctx.beginPath(); ctx.moveTo(e * w * 0.3, -h * 0.6); ctx.lineTo(e * w * 0.55, -h * 1.05); ctx.stroke(); } }
+  ctx.restore();
+  if (!ATTRACT) {
+    const mine = p.id === net.sessionId, label = mine ? "You" : nameOf(p.id).split(" ")[0].slice(0, 9);
+    ctx.font = `800 ${Math.max(10, Math.round(U * 0.36))}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "#000a";
+    ctx.strokeText(label, bx, by - h - U * 0.25); ctx.fillStyle = mine ? "#ffe066" : "#fff"; ctx.fillText(label, bx, by - h - U * 0.25);
+    if (mine) { ctx.fillStyle = "#ffe066"; ctx.beginPath(); ctx.moveTo(bx - 7, by - h - U * 0.75); ctx.lineTo(bx + 7, by - h - U * 0.75); ctx.lineTo(bx, by - h - U * 0.6); ctx.fill(); }
+  }
+}
+/** Each team's pull power, top left and top right. */
+function drawMeters(g, T) {
+  const w = Math.min(160, W * 0.28), h = 12, y = Math.max(70, H * 0.12);
+  for (const k of [0, 1]) {
+    const x = k ? W - 16 - w : 16;
+    ctx.fillStyle = "#00000044"; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = TEAM[k].color; const f = T.p[k] * w; ctx.fillRect(k ? x + w - f : x, y, f, h);
+    ctx.strokeStyle = "#ffffffaa"; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, h);
+    ctx.font = "800 12px system-ui, sans-serif"; ctx.textAlign = k ? "right" : "left"; ctx.fillStyle = "#fff"; ctx.fillText(`${TEAM[k].name} POWER`, k ? x + w : x, y - 5);
+  }
+}
+/** The beat ring: tap when the shrinking ring meets the circle. */
+function drawBeatRing(g, t, now) {
+  if (ATTRACT) return;
+  const cx = W / 2, cy = H - Math.max(110, H * 0.17), r0 = Math.min(44, W * 0.11), f = (t - g.t0) / beatMs(g), frac = f - Math.floor(f), next = 1 - frac;
+  const counting = t < g.t0, myTeam = teamOf(g, net.sessionId);
+  const pulse = Math.pow(Math.max(0, 1 - frac * 4), 2);
+  ctx.fillStyle = `rgba(0,0,0,${0.25 + pulse * 0.1})`; ctx.beginPath(); ctx.arc(cx, cy, r0, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = 5; ctx.strokeStyle = myTeam >= 0 ? TEAM[myTeam].color : "#fff"; ctx.beginPath(); ctx.arc(cx, cy, r0 * (1 + pulse * 0.12), 0, Math.PI * 2); ctx.stroke();
+  if (g.phase === "pull") { ctx.lineWidth = 3; ctx.strokeStyle = `rgba(255,255,255,${0.35 + 0.65 * (1 - next)})`; ctx.beginPath(); ctx.arc(cx, cy, r0 * (1 + next * 1.6), 0, Math.PI * 2); ctx.stroke(); }
+  ctx.font = `900 ${Math.round(r0 * 0.5)}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "#fff";
+  ctx.fillText(counting && g.phase === "pull" ? String(Math.ceil((g.t0 - t) / beatMs(g))) : me.combo >= 2 && g.phase === "pull" ? `×${me.combo}` : "TAP", cx, cy + 1);
+  if (me.judge && now - me.judge.at < 450) { const a = 1 - (now - me.judge.at) / 450; ctx.globalAlpha = a; ctx.font = `900 ${Math.round(r0 * 0.5)}px system-ui, sans-serif`; ctx.lineWidth = 4; ctx.strokeStyle = "#0008"; ctx.strokeText(me.judge.j, cx, cy - r0 - 22 - (1 - a) * 12); ctx.fillStyle = me.judge.c; ctx.fillText(me.judge.j, cx, cy - r0 - 22 - (1 - a) * 12); ctx.globalAlpha = 1; }
+  ctx.textBaseline = "alphabetic";
+}
+
+// ── HUD & RESULTS ───────────────────────────────────────────────────────────────────
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const local = { big: "", bigUntil: 0 };
+const bigText = (html, ms) => { local.big = html; local.bigUntil = performance.now() + ms; };
+let board = null, boardFor = -1, reconnecting = false;
+function hud(g, t) {
+  const id = net.sessionId, k = teamOf(g, id);
+  if (ATTRACT) { for (const x of ["top", "msg", "net"]) $(x).textContent = ""; $("big").innerHTML = performance.now() < local.bigUntil ? `<div>${local.big}</div>` : ""; return; }
+  const left = g.phase === "pull" ? Math.max(0, Math.ceil((g.ends - t) / 1000)) : 0;
+  $("top").innerHTML = g.phase === "over" ? "" : `<b class="l">RED ${g.wins[0]}</b> – <b class="r">${g.wins[1]} BLUE</b><small>Round ${g.round} of 3${g.phase === "pull" && t > g.t0 ? ` · ${left}s` : ""}${k >= 0 ? ` · you pull for ${TEAM[k].name}` : ""}</small>`;
+  let big = performance.now() < local.bigUntil ? local.big : "";
+  if (g.phase === "brief") big = `${k >= 0 ? `<span style="color:${TEAM[k].color}">${TEAM[k].name} TEAM</span>` : "Tug Team"}<small>Tap on the beat to pull. Tap together for a HEAVE!</small>`;
+  $("big").innerHTML = big ? `<div>${big}</div>` : "";
+  let msg = "";
+  if (g.phase === "pull") msg = me.taps < 6 ? (touchUI ? "Tap anywhere on the beat, when the ring closes" : "Press Space (or any key, or click) on the beat") : t < g.t0 ? "Get ready…" : "";
+  $("msg").textContent = msg;
+  const n = livePlayers().length;
+  $("net").textContent = net.offline ? "Offline: playing with bots" : reconnecting ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the rope" : ""}`;
+  const over = g.phase === "over" && t - (g.ends - CONFIG.overMs) > 1500;
+  $("over").hidden = !over;
+  if (over) results(g, t);
+}
+function results(g, t) {
+  const id = net.sessionId, k = teamOf(g, id), won = k === g.winner;
+  $("overTitle").textContent = k < 0 ? `${TEAM[g.winner].name} wins!` : won ? `${TEAM[k].name} wins! You won` : `${TEAM[g.winner].name} wins. Into the mud!`;
+  $("overLine").textContent = `Rounds: RED ${g.wins[0]}, BLUE ${g.wins[1]}.`;
+  const st = g.tot || {}, rows = Object.keys(g.team).map((i) => [i, st[i] || [0, 0, 0]]).sort((a, b) => b[1][0] - a[1][0]).slice(0, 10);
+  $("results").innerHTML = rows.map(([i, s]) => `<li class="${i === id ? "me" : ""}"><i style="color:${TEAM[g.team[i]].color}">●</i> ${esc(i === id ? "You" : nameOf(i))}<span>${Math.round(s[0] * 10)} pts · ${s[1]} perfect</span></li>`).join("");
+  $("next").textContent = `Next match in ${Math.max(0, Math.ceil((g.ends - t) / 1000))}s`;
+  if (boardFor !== g.id) { boardFor = g.id; showBoard(won && me.submitted !== g.id); me.submitted = g.id; }
+}
+function showBoard(won) {
+  const list = $("board");
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li>Loading…</li>";
+  (won ? board.submit(1, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} win${e.score === 1 ? "" : "s"}</span></li>`).join("") : "<li>No wins yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+/** Keep a color nobody else has: the later sessionId gives way, and the bots' colors count as taken. */
+function fixColor() {
+  const others = Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId), bots = botList().map((b) => b.c);
+  if (!others.some(([id, p]) => id < net.sessionId && p.c === myColor) && !bots.includes(myColor)) return;
+  const used = new Set([...others.map(([, p]) => p.c), ...bots]);
+  const free = COLORS.find((c) => !used.has(c));
+  if (free && free !== myColor) { myColor = free; net.me.set("c", myColor); }
+}
+$("again").onclick = () => { const g = game(); if (!g || g.phase !== "over") return; if (isHost()) host.again = true; else net.send("again", {}); $("over").hidden = true; };
+
+/** One-off effects worked out from what changed in state (so nobody misses one). */
+let prevG = null, prevT = null;
+function effects(g, T, now, t) {
+  if (T && prevT && prevT.r === T.r) {
+    for (const [id, kq] of Object.entries(T.k)) if (id !== net.sessionId && (!prevT.k[id] || prevT.k[id][0] !== kq[0])) pulled.set(id, now);
+    for (const k of [0, 1]) if (T.hv[k] !== prevT.hv[k] && T.hv[k] >= 0) { heaveAt[k] = now; shake = 0.6; sfx("heave"); if (ATTRACT || teamOf(g, net.sessionId) === k) bigText("HEAVE!", 600); }
+  }
+  prevT = T;
+  if (prevG && prevG.id === g.id) {
+    if (g.phase === "pull" && prevG.phase !== "pull") me.taps = Math.min(me.taps, 5);
+    if (g.phase === "splash" && prevG.phase !== "splash") {
+      sfx("splash"); shake = 1;
+      for (let i = 0; i < 4; i++) setTimeout(() => burst(TEAM[1 - g.last].side * (MUD * 0.5), 0.1, ["#5b3518", "#7a4a26", "#a0703f"], 18, 7), i * 140);
+      const k = teamOf(g, net.sessionId);
+      bigText(k >= 0 && k !== g.last ? `SPLASH!<small>${TEAM[g.last].name} wins round ${g.round}</small>` : `${TEAM[g.last].name} WINS!<small>Round ${g.round}</small>`, 2200);
+      if (k === g.last) sfx("win");
+    }
+  }
+  if (g.phase === "pull" && prevG && prevG.phase === "pull" && t >= g.t0 && (prevG._t || 0) < g.t0 && !ATTRACT) { sfx("go"); bigText("PULL!", 700); }
+  prevG = { ...g, _t: t };
+}
+
+// ── INPUT ───────────────────────────────────────────────────────────────────────────
+const touchUI = matchMedia("(pointer: coarse)").matches && !ATTRACT;
+if (touchUI) $("msg").style.bottom = "calc(max(18px, env(safe-area-inset-bottom)) + 30px)";
+addEventListener("keydown", (e) => {
+  if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.key === "Tab") return;
+  if (e.key === " " || e.key.startsWith("Arrow")) e.preventDefault();
+  if (e.key === "Enter" && game()?.phase === "over") return $("again").click();
+  tap(e.timeStamp);
+});
+cv.addEventListener("pointerdown", (e) => { e.preventDefault(); tap(e.timeStamp); }); // each finger is its own tap
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+
+// ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
+let last = performance.now(), lastHb = 0, lastHud = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (performance.now() - lastTick > 1000) { hostHold = performance.now() + 700; host.was = false; host.last = null; } // the tab was frozen or in the background: someone else may have hosted meanwhile, so let its state arrive, then adopt it
+  lastTick = performance.now(); // not the rAF time: after a long freeze Chrome can stamp the first frame from before it ended
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
+  if (isHost()) hostTick(dt, now); else host.was = false;
+  const g = game();
+  if (!g) { ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.fillStyle = "#8fd3ff"; ctx.fillRect(0, 0, W, H); return; }
+  const t = Date.now(), T = tug(g);
+  if (me.round !== roundKey(g)) Object.assign(me, { round: roundKey(g), lastBeat: -99, combo: 0, batch: [] }); // a new round: a fresh combo
+  autopilot(g, t);
+  if (now - me.lastSend > CONFIG.sendMs) { me.lastSend = now; flush(g); }
+  effects(g, T, now, t);
+  playDrums(g, t);
+  draw(g, T, t, now, dt);
+  if (now - lastHud > 100) { lastHud = now; hud(g, t); }
+}
+
+(async function start() {
+  net = await connect();
+  net.onState((st) => { S = st; });
+  net.on("pull", onPull);
+  net.on("again", () => { const g = game(); if (isHost() && g && g.phase === "over") host.again = true; });
+  net.onDisconnect(() => { reconnecting = true; $("net").textContent = "Reconnecting…"; });
+  net.onReconnect(() => { reconnecting = false; });
+  if (!net.offline && typeof MP !== "undefined") board = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
+  const taken = new Set(Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c));
+  myColor = COLORS.find((c) => !taken.has(c)) || COLORS[Math.floor(Math.random() * COLORS.length)];
+  net.me.set({ n: myName, c: myColor, hb: Date.now() });
+  if (QS.has("test")) window.__test = { game, tug: () => tug(game()), me, isHost, nearestBeat }; // for test scripts only
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

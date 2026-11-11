@@ -1,0 +1,21 @@
+{
+  "name": "Tug Team",
+  "genre": "party",
+  "dim": "2D",
+  "mode": "Versus",
+  "players": "2–10",
+  "hook": "Pull on the beat. Heave together. Drag them into the mud.",
+  "how": "Two teams, one rope, a mud pit in between. Tap on the beat for a strong pull (off the beat is weak), keep a streak going for extra power, and when your whole team hits the same beat you HEAVE. Drag the flag past your line to win the round; best of 3.",
+  "controls": "Space, any key or click on the beat; on touch, tap anywhere",
+  "uses": [
+    ["Host-run rules", "The host's browser adds up every pull, moves the rope and spots the heaves; if it leaves, the next player takes over."],
+    ["Bots", "Bots fill both teams and tap close to the beat, but not perfectly."],
+    ["Live sync", "Everyone hears the same beat and sees the same rope."],
+    ["Leaderboard", "Matches won."]
+  ],
+  "ideas": [
+    "Make it a tug of war over a lava pit with dragons",
+    "Speed the beat up when the rope is near the middle",
+    "Add a power-up drum that doubles your team's pull for 5 beats"
+  ]
+}
