@@ -25,6 +25,7 @@
   .card li span { float: right; font-variant-numeric: tabular-nums; opacity: .9; }
   .card li.me { color: #ffe066; font-weight: 700; }
   .card li i { font-style: normal; }
+  .card li.note { list-style: none; margin-left: -24px; opacity: .85; } /* a message in place of the list: no "1." in front of it */
   .card p { margin: 6px 0 0; font-size: 14px; opacity: .9; }
   button.go { margin-top: 16px; width: 100%; min-height: 48px; border: 0; border-radius: 12px; background: #ffe066; color: #4a3120; font: 800 17px system-ui, sans-serif; cursor: pointer; }
 </style>
@@ -39,7 +40,7 @@
 <div id="over" hidden><div class="card">
   <h2 id="overTitle"></h2><p id="overLine"></p>
   <h3>Strongest pullers</h3><ol id="results"></ol>
-  <h3>Most wins</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Most wins</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button class="go" id="again">Play again</button>
   <p id="next"></p>
 </div></div>
@@ -475,7 +476,7 @@ function draw(g, T, t, now, dt) {
   }
   for (const p of people) drawBuddy(p, g, T, now);
   // HEAVE! over a team
-  for (const k of [0, 1]) { const age = (now - heaveAt[k]) / 1000; if (age < 0.8) { ctx.globalAlpha = 1 - age / 0.8; ctx.font = `900 ${Math.round(U * 0.9 * (1 + (0.8 - age) * 0.3))}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.lineWidth = 6; ctx.strokeStyle = TEAM[k].dark; ctx.strokeText("HEAVE!", X(TEAM[k].side * 5), Y(3.2 + age)); ctx.fillStyle = "#fff"; ctx.fillText("HEAVE!", X(TEAM[k].side * 5), Y(3.2 + age)); ctx.globalAlpha = 1; } }
+  for (const k of [0, 1]) { const age = (now - heaveAt[k]) / 1000; if (age < 0.8) { ctx.globalAlpha = 1 - age / 0.8; ctx.font = `900 ${Math.round(U * 0.9 * (1 + (0.8 - age) * 0.3))}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.lineWidth = 6; ctx.strokeStyle = TEAM[k].dark; const hw = ctx.measureText("HEAVE!").width / 2 + 8, hx = clamp(X(TEAM[k].side * 5), hw, W - hw); /* kept on screen */ ctx.strokeText("HEAVE!", hx, Y(3.2 + age)); ctx.fillStyle = "#fff"; ctx.fillText("HEAVE!", hx, Y(3.2 + age)); ctx.globalAlpha = 1; } }
   // mud splashes and sparks
   for (let i = fx.length - 1; i >= 0; i--) { const p = fx[i]; p.life -= dt; if (p.life <= 0) { fx.splice(i, 1); continue; } p.x += p.vx * dt; p.y += p.vy * dt; p.vy -= p.grav * dt; ctx.globalAlpha = Math.min(1, p.life * 2); ctx.fillStyle = p.col; ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), p.r * U, 0, Math.PI * 2); ctx.fill(); }
   ctx.globalAlpha = 1;
@@ -525,7 +526,8 @@ function drawMeters(g, T) {
     ctx.fillStyle = "#00000044"; ctx.fillRect(x, y, w, h);
     ctx.fillStyle = TEAM[k].color; const f = T.p[k] * w; ctx.fillRect(k ? x + w - f : x, y, f, h);
     ctx.strokeStyle = "#ffffffaa"; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, h);
-    ctx.font = "800 12px system-ui, sans-serif"; ctx.textAlign = k ? "right" : "left"; ctx.fillStyle = "#fff"; ctx.fillText(`${TEAM[k].name} POWER`, k ? x + w : x, y - 5);
+    ctx.font = "800 12px system-ui, sans-serif"; ctx.textAlign = k ? "right" : "left"; ctx.lineWidth = 3; ctx.strokeStyle = "#0008"; ctx.strokeText(`${TEAM[k].name} POWER`, k ? x + w : x, y - 5); // outlined: readable over the sun and clouds
+    ctx.fillStyle = "#fff"; ctx.fillText(`${TEAM[k].name} POWER`, k ? x + w : x, y - 5);
   }
 }
 /** The beat ring: tap when the shrinking ring meets the circle. */
@@ -576,11 +578,11 @@ function results(g, t) {
 }
 function showBoard(won) {
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = '<li class="note">Leaderboards need a connection.</li>'; return; }
+  list.innerHTML = '<li class="note">Loading…</li>';
   (won ? board.submit(1, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} win${e.score === 1 ? "" : "s"}</span></li>`).join("") : "<li>No wins yet. Be the first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} win${e.score === 1 ? "" : "s"}</span></li>`).join("") : '<li class="note">No wins yet. Be the first.</li>';
+  }).catch(() => { list.innerHTML = `<li class="note">Couldn't load the leaderboard.</li>`; });
 }
 /** Keep a color nobody else has: the later sessionId gives way, and the bots' colors count as taken. */
 function fixColor() {
@@ -599,7 +601,7 @@ function effects(g, T, now, t) {
     for (const [id, kq] of Object.entries(T.k)) if (id !== net.sessionId && (!prevT.k[id] || prevT.k[id][0] !== kq[0])) pulled.set(id, now);
     for (const k of [0, 1]) if (T.hv[k] !== prevT.hv[k] && T.hv[k] >= 0) { heaveAt[k] = now; shake = 0.6; sfx("heave"); if (ATTRACT || teamOf(g, net.sessionId) === k) bigText("HEAVE!", 600); }
   }
-  prevT = T;
+  prevT = T && { r: T.r, hv: [...T.hv], k: { ...T.k } }; // a copy: on the host T is its live rope, changed in place, so comparing to it would never see a pull or a heave
   if (prevG && prevG.id === g.id) {
     if (g.phase === "pull" && prevG.phase !== "pull") me.taps = Math.min(me.taps, 5);
     if (g.phase === "splash" && prevG.phase !== "splash") {
