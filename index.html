@@ -318,7 +318,7 @@ function hostTick(dt, now) {
 /** One pull: one per player per beat; the host works out the combo, moves the rope and notes it for heaves. */
 function applyTap(G, id, beat, q) {
   const k = teamOf(G, id), T = host.tug;
-  if (k < 0 || G.phase !== "pull" || !T || T.r !== roundKey(G) || beat < 0 || ![0, 1, 2].includes(q)) return;
+  if (k < 0 || G.phase !== "pull" || !T || T.r !== roundKey(G) || !Number.isInteger(beat) || beat < 0 || ![0, 1, 2].includes(q)) return; // whole beats only: 3.1, 3.2… are not extra pulls
   const cur = nearestBeat(G, Date.now()).n;
   if (beat > cur + 1 || beat < cur - 6 || host.seen.has(id + ":" + beat)) return;
   host.seen.add(id + ":" + beat);
@@ -415,7 +415,8 @@ const pulled = new Map(); // id -> when its last pull was seen (performance time
 const heaveAt = [0, 0], fx = [];
 let shown = 0, shake = 0; // the rope position as drawn (eased toward the published one)
 function burst(x, y, colors, n, speed, grav = 9) { for (let i = 0; i < n; i++) fx.push({ x, y, vx: (Math.random() - 0.5) * speed, vy: Math.random() * speed * 0.8, life: 0.6 + Math.random() * 0.6, col: colors[i % colors.length], grav, r: 0.06 + Math.random() * 0.08 }); }
-const X = (x) => W / 2 + x * U, Y = (y) => GY - y * U;
+const PAN = 1.5; // the view follows the rope this far (units per unit of rope), so the winning team never walks off the screen
+const X = (x) => W / 2 + (x - shown * PAN) * U, Y = (y) => GY - y * U;
 /** Where teammate i of team k stands: on its own bank, all of them dragged along by the rope. */
 const memberX = (k, i, rope) => TEAM[k].side * (3.0 + i * SP) + rope * 2.6;
 const MUD = 2.4; // the pit runs from -MUD to +MUD
@@ -511,7 +512,7 @@ function drawBuddy(p, g, T, now) {
   if (g.phase !== "splash") { ctx.strokeStyle = color; ctx.lineWidth = U * 0.14; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(0, -h * 0.45); ctx.lineTo(-side * w * 0.65, -h * 0.72); ctx.stroke(); } // arms to the rope
   else if (won) { ctx.strokeStyle = color; ctx.lineWidth = U * 0.14; ctx.lineCap = "round"; for (const e of [-1, 1]) { ctx.beginPath(); ctx.moveTo(e * w * 0.3, -h * 0.6); ctx.lineTo(e * w * 0.55, -h * 1.05); ctx.stroke(); } }
   ctx.restore();
-  if (!ATTRACT) {
+  if (!ATTRACT && !(p.fall > 0.5 && p.id !== net.sessionId)) { // in the mud the losers pile up: only "You" keeps its tag there
     const mine = p.id === net.sessionId, label = mine ? "You" : nameOf(p.id).split(" ")[0].slice(0, 9);
     ctx.font = `800 ${Math.max(10, Math.round(U * 0.36))}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "#000a";
     ctx.strokeText(label, bx, by - h - U * 0.25); ctx.fillStyle = mine ? "#ffe066" : "#fff"; ctx.fillText(label, bx, by - h - U * 0.25);
